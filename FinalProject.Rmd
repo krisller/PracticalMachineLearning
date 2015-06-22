@@ -1,0 +1,151 @@
+---
+output:
+  html_document:
+    pandoc_args: [
+      "+RTS", "-K64m",
+      "-RTS"
+    ]
+---
+
+#Practical Machine Learning - Course Project
+
+##Summary
+
+Using devices such as Jawbone Up, Nike FuelBand, and Fitbit it is now possible to collect a large amount of data about personal activity relatively inexpensively. These type of devices are part of the quantified self movement – a group of enthusiasts who take measurements about themselves regularly to improve their health, to find patterns in their behavior, or because they are tech geeks. One thing that people regularly do is quantify how much of a particular activity they do, but they rarely quantify how well they do it. In this project, your goal will be to use data from accelerometers on the belt, forearm, arm, and dumbell of 6 participants. They were asked to perform barbell lifts correctly and incorrectly in 5 different ways. More information is available from the website here: http://groupware.les.inf.puc-rio.br/har (see the section on the Weight Lifting Exercise Dataset). 
+
+##Data
+
+The training data for this project are available here: 
+
+https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv
+
+The test data are available here: 
+
+https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv
+
+The data for this project come from this source: http://groupware.les.inf.puc-rio.br/har.
+
+##Load and Data Processing
+
+Load require R libraries
+
+```{r}
+require(caret)
+require(corrplot)
+require(randomForest)
+
+#For reproductible code the seed was set 1921
+set.seed(1921)
+
+#Download files if its not exists.
+if (!file.exists("pml-training.csv")) {
+    download.file("http://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv", 
+        destfile = "pml-training.csv")
+}
+if (!file.exists("pml-testing.csv")) {
+    download.file("http://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv", 
+        destfile = "pml-testing.csv")
+}
+
+#Read csv files 
+Training <- read.csv("pml-training.csv", header = TRUE, na.strings = c("NA",""))
+Testing <- read.csv("pml-testing.csv", header = TRUE, na.strings = c("NA",""))
+```
+
+The training set consists of 19622 observations of 160 variables.
+
+```{r}
+dim(Training)
+```
+
+Remove columns with missing values and unnecessary to analysis.
+
+```{r}
+TrainingFilter <- Training[,(colSums(is.na(Training)) == 0)]
+TestingFilter <- Testing[,(colSums(is.na(Testing)) == 0)]
+
+ColumnsRemove <- c("X","user_name","raw_timestamp_part_1","raw_timestamp_part_2","cvtd_timestamp","new_window")
+TrainingFilter <- TrainingFilter[,!(names(TrainingFilter) %in% ColumnsRemove)]
+TestingFilter <- TestingFilter[,!(names(TestingFilter) %in% ColumnsRemove)]
+```
+
+Split the training dataset in two parts, the first, with 70% of the observations, is to create our model. The second, with 30% of the observations, is to validate our model.
+
+```{r}
+inTrain = createDataPartition(y = TrainingFilter$classe, p = 0.7, list = FALSE)
+TrainingFiltred <- TrainingFilter[inTrain,]
+TrainingValidation <- TrainingFilter[-inTrain,]
+```
+
+Our data set contains 54 variables, with the last column that contains the variable 'class' we are trying to predict. We find correlations between variables in our data set without the column class. We may want to remove highly correlated predictors of our analysis and replace them with weighted combination of predictors. This may allow a more complete capture of the available information.
+
+```{r}
+corMatrix<- cor(TrainingFiltred[, -54])
+corrplot(corMatrix, method = "square", type = "lower", order = "alphabet", tl.cex = 0.6)
+```
+
+We can see in the above graph how different columns are correlated. We will implement a principal components analysis to produce a set of linearly uncorrelated variables to use as our predictor to make a prediction model less biased.
+
+##Principal Components Analysis
+
+We pre-process our data using a principal component analysis, leaving out the last column (‘classe’). After pre-processing, we use the ‘predict’ function to apply the pre-processing to both the training and validation subsets of the original larger ‘training’ dataset.
+
+```{r}
+preProc <- preProcess(TrainingFiltred[, -54], method = "pca", thresh = 0.99)
+TrainingPredict <- predict(preProc, TrainingFiltred[, -54])
+ValidationPredict <- predict(preProc, TrainingValidation[, -54])
+```
+
+Next, we use a randomForest function to approach on the smaller training dataset. 
+
+##Random Forest Model  
+
+A random forest model was built using all of the prediction variables and the classe variable as the categorical outcome.
+
+```{r}
+modFit <- randomForest(TrainingFiltred$classe  ~ ., data = TrainingPredict)
+```
+
+We now review the relative importance of the resulting principal components of the trained model, ‘modFit’.
+
+```{r}
+varImpPlot(modFit, pch = 20, main = "Importance of Variables", sort = TRUE)
+```
+
+As you look from the top to the bottom on the y-axis, this plot shows each of the principal components in order from most important to least important. The degree of importance is shown on the x-axis-increasing from left to right. Therefore, points high and to the right on this graph correspond to those principal components that are especially valuable in terms of being able to classify the observed training data.
+
+##Cross Validation Testing and Out-of-Sample Error Estimate
+
+Call the ‘predict’ function again so that our trained model can be applied to our cross validation test dataset. We can then view the resulting table in the ‘confusionMatrix’ function’s output to see how well the model predicted/classified the values in the validation test set
+
+```{r}
+ValidationRF <- predict(modFit, ValidationPredict)
+Confusion <- confusionMatrix(TrainingValidation$classe, ValidationRF)
+Confusion$table
+```
+
+The estimated out-of-sample error is 1.000 minus the model’s accuracy, the later of which is provided in the output of the confusionmatrix, or more directly via the ‘postresample’ function.
+
+```{r}
+accur <- postResample(TrainingValidation$classe, ValidationRF)
+Accuracy <- accur[[1]]
+Accuracy
+
+SampleError <- 1 - Accuracy
+SampleError
+```
+
+The estimated accuracy of the model is `r Accuracy*100`% and the estimated out-of-sample error based on our fitted model applied to the cross validation dataset is `r SampleError*100`%.
+
+##Predicted Results
+
+Finally, we apply the pre-processing to the original testing dataset, after removing the extraneous column labeled ‘problem_id’ (column 54). We then run our model against the testing dataset and display the predicted results.
+
+```{r}
+
+TestPredict <- predict(preProc, TestingFilter[, -54])
+FinalPredict <- predict(modFit, TestPredict)
+FinalPredict
+```
+
+
